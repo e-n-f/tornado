@@ -71,6 +71,21 @@ long long seq = 0;
 
 char tags[50000] = "";
 
+void appendq(char *s, const char *suffix) {
+	while (*s != '\0') {
+		s++;
+	}
+
+	while (*suffix != '\0') {
+		if (*suffix == '"' || *suffix == '\\') {
+			*s++ = '\\';
+		}
+		*s++ = *suffix++;
+	}
+
+	*s = '\0';
+}
+
 static void XMLCALL start(void *data, const char *element, const char **attribute) {
 	static struct node prevnode = { 0, 0, 0 };
 
@@ -183,14 +198,18 @@ static void XMLCALL start(void *data, const char *element, const char **attribut
 			}
 
 			int n = strlen(tags);
-			if (n + strlen(key) + strlen(value) + 5 < sizeof(tags)) {
-				sprintf(tags + n, ";%s=%s", key, value);
+			if (n + 2 * strlen(key) + 2 * strlen(value) + 9 < sizeof(tags)) {
+				sprintf(tags + strlen(tags), ", \"");
+				appendq(tags, key);
+				sprintf(tags + strlen(tags), "\": \"");
+				appendq(tags, value);
+				sprintf(tags + strlen(tags), "\"");
 			}
 		}
 	}
 }
 
-int max = 10;
+int max = INT_MAX / 2;
 
 static void XMLCALL end(void *data, const char *el) {
 	if (strcmp(el, "way") == 0) {
@@ -207,19 +226,81 @@ static void XMLCALL end(void *data, const char *el) {
 			fprintf(stderr, "couldn't parse %s\n", thetimestamp);
 		}
 
-		for (x = 0; x < thenodecount; x += max - 1) {
-			if (x + 1 < thenodecount) {
-				int i;
-				for (i = x; i < x + max && i < thenodecount; i++) {
-					printf("%lf,%lf ", thenodes[i]->lat / 1000000.0,
-							   thenodes[i]->lon / 1000000.0);
+#define LAT_MULT (1000000.0)
+#define LON_MULT (1000000.0)
+
+		if (thenodecount > 0 /* include */) {
+			int polygon = 0;
+			if (thenodes[0] == thenodes[thenodecount - 1]) {
+				polygon = 1;
+			}
+
+			int start = 0;
+			int end;
+			int split = 0;
+			for (end = 0; end <= thenodecount; end++) {
+				if (end == thenodecount) {
+					int within = 0;
+					if (end != thenodecount) {
+						split = 1;
+					}
+
+					printf("{ \"type\": \"Feature\"");
+
+					if (polygon) {
+						printf(", \"geometry\": { \"type\": \"Polygon\", \"coordinates\": [ [");
+					} else {
+						printf(", \"geometry\": { \"type\": \"LineString\", \"coordinates\": [");
+					}
+
+					if (start > 0) {
+						printf("[ %lf,%lf ]", (thenodes[start - 1]->lon + thenodes[start]->lon) / LON_MULT / 2,
+								      (thenodes[start - 1]->lat + thenodes[start]->lat) / LON_MULT / 2);
+						within = 1;
+					}
+
+					int i;
+					for (i = start; i < end; i++) {
+						if (within) {
+							printf(", ");
+						}
+
+						printf("[ %lf,%lf ]", thenodes[i]->lon / LON_MULT,
+								      thenodes[i]->lat / LON_MULT);
+						within = 1;
+					}
+
+					if (end < thenodecount) {
+						if (within) {
+							printf(", ");
+						}
+
+						printf("[ %lf,%lf ]", (thenodes[end - 1]->lon + thenodes[end]->lon) / LON_MULT / 2,
+								      (thenodes[end - 1]->lat + thenodes[end]->lat) / LON_MULT / 2);
+					}
+
+					if (polygon) {
+						printf("] ] }, \"properties\": { ");
+					} else {
+						printf("] }, \"properties\": { ");
+					}
+
+					printf("\"id\": %u", theway);
+					printf(", \"timestamp\": \"%s\"", thetimestamp);
+					printf(", \"scalartime\": %ld", t);
+
+					if (0 /* bogus */) {
+						printf(", \"bogus\": \"true\"");
+					}
+					if (split) {
+						printf(", \"split\": \"true\"");
+					}
+
+					printf("%s", tags);
+					printf(" } }\n");
+
+					start = end;
 				}
-
-				printf(" 32:%d", (int) t);
-
-				printf("// id=%u ", theway);
-				printf("// timestamp=%s ", thetimestamp);
-				printf("%s\n", tags);
 			}
 		}
 
