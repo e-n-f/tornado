@@ -32,6 +32,22 @@ line-width: 0.5;
    polygon-opacity: .15;
 }
 
+#buildings {
+ 
+  [zoom >= 11] {
+     [scalartime > 1430938785] {
+       line-color: #AAAA00;
+       [building != ""] { line-color: #FFFF00; }
+       line-width: 1;
+    
+      [zoom <= 11] { line-width: .5; }
+     [zoom <= 10] { line-width: .25; }
+     [zoom <= 9] { line-width: .125; }
+     }
+    }
+
+}
+
 // Languages: name (local), name_en, name_fr, name_es, name_de
 @name: '[name_en]';
 

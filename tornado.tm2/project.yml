@@ -11,8 +11,8 @@ bounds:
   - 180
   - 85.0511
 center: 
-  - -97.8264
-  - 35.0862
+  - -97.8525
+  - 35.1811
   - 10
 description: ''
 format: "png8:m=h"
@@ -21,7 +21,7 @@ layers: null
 maxzoom: 22
 minzoom: 0
 name: Bridge Creek tornado
-source: "mapbox:///mapbox.mapbox-streets-v5,enf.7ysw0zfr"
+source: "mapbox:///mapbox.mapbox-streets-v5,enf.7ysw0zfr,enf.znyfzuxr"
 styles: 
   - style.mss
 template: ''
