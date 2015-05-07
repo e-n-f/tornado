@@ -1,0 +1,27 @@
+_prefs: 
+  mapid: enf.3b5ef836
+  saveCenter: true
+_properties: 
+  bridge: 
+    "group-by": layer
+attribution: "<a href=\"http://wdtinc.com/\">Weather Decision Technologies</a>, <a href='https://www.mapbox.com/about/maps/' target='_blank'>&copy; Mapbox &copy; OpenStreetMap</a> <a class='mapbox-improve-map' href='https://www.mapbox.com/map-feedback/' target='_blank'>Improve this map</a>"
+bounds: 
+  - -180
+  - -85.0511
+  - 180
+  - 85.0511
+center: 
+  - -97.8264
+  - 35.0862
+  - 10
+description: ''
+format: "png8:m=h"
+interactivity_layer: ''
+layers: null
+maxzoom: 22
+minzoom: 0
+name: Bridge Creek tornado
+source: "mapbox:///mapbox.mapbox-streets-v5,enf.7ysw0zfr"
+styles: 
+  - style.mss
+template: ''
