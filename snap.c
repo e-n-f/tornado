@@ -10,29 +10,10 @@
 #include <math.h>
 #include <time.h>
 
-unsigned mindate = 0;
-
-#define LON_BITS ((7 * 8 - 4) / 2)
-#define LON_MULT (((1 << (LON_BITS - 1)) - 1) / 180.0)
-#define FOOT .00000274
-
-#define BASE_YEAR 2004
-
-struct __attribute__ ((__packed__)) pack {
-	int lat : (LON_BITS - 1);
-	int lon : LON_BITS;
-	unsigned int when : 4;
-	unsigned int uid : 8;
-};
-
 struct node {
-	unsigned id; // now 76% of the way to 2^32!
-};
-
-struct node2 {
+	unsigned id; // still just over 2^31
 	int lat;
 	int lon;
-	unsigned date;
 };
 
 int nodecmp(const void *v1, const void *v2) {
@@ -78,180 +59,113 @@ void *search(const void *key, const void *base, size_t nel, size_t width,
 #define BUFFSIZE        8192
 
 char tmpfname[L_tmpnam];
-int tmpfd;
-long long tmplen;
-struct pack *tmpmap;
+FILE *tmp;
+void *map = NULL;
+long long nel;
 
 unsigned theway = 0;
-struct pack *thenodes[100000];
+char thetimestamp[5000] = "";
+struct node *thenodes[100000];
 unsigned thenodecount = 0;
 long long seq = 0;
-long long maxnode = 0;
 
 char tags[50000] = "";
-char thetimestamp[50000] = "";
-int bogus = 0;
-
-unsigned parsedate(const char *date) {
-	struct tm tm;
-
-	if (sscanf(date, "%d-%d-%dT%d:%d:%d",
-		&tm.tm_year, &tm.tm_mon, &tm.tm_mday,
-		&tm.tm_hour, &tm.tm_min, &tm.tm_sec) == 6) {
-
-		int day = (tm.tm_mday - 1) + (31 * (tm.tm_mon - 1)) + (372 * (tm.tm_year - BASE_YEAR));
-		return (day * 86400) +
-			3600 * tm.tm_hour + 60 * tm.tm_min + tm.tm_sec;
-	} else {
-		fprintf(stderr, "can't parse date %s\n", date);
-		return 0;
-	}
-}
-
-void printdate(unsigned date) {
-	int tod = date % 86400;
-	date /= 86400;
-
-	int day = date % 31 + 1;
-	date /= 31;
-
-	int month = date % 12 + 1;
-	date /= 12;
-
-	int year = date + BASE_YEAR;
-
-	printf("%04d-%02d-%02d %02d:%02d:%02d ",
-		year, month, day, tod / 3600, (tod / 60) % 60, tod % 60);
-}
-
-void appendq(char *s, const char *suffix) {
-	while (*s != '\0') {
-		s++;
-	}
-
-	while (*suffix != '\0') {
-		if (*suffix == '"' || *suffix == '\\') {
-			*s++ = '\\';
-		}
-		*s++ = *suffix++;
-	}
-
-	*s = '\0';
-}
 
 static void XMLCALL start(void *data, const char *element, const char **attribute) {
-	if (strcmp(element, "node") == 0) {
-		long long id = -1;
-		int lat = INT_MIN;
-		int lon = INT_MIN;
-		unsigned date = 0;
-		unsigned uid = 0;
-		const char *timestamp = "none";
+	static struct node prevnode = { 0, 0, 0 };
 
+	if (strcmp(element, "node") == 0) {
+		struct node n;
 		int i;
+		n.id = 0;
+		n.lat = INT_MIN;
+		n.lon = INT_MIN;
+
 		for (i = 0; attribute[i] != NULL; i += 2) {
 			if (strcmp(attribute[i], "id") == 0) {
-				id = atoll(attribute[i + 1]);
+				n.id = atoi(attribute[i + 1]);
 			} else if (strcmp(attribute[i], "lat") == 0) {
-				lat = atof(attribute[i + 1]) * LON_MULT;
+				n.lat = atof(attribute[i + 1]) * 1000000.0;
 			} else if (strcmp(attribute[i], "lon") == 0) {
-				lon = atof(attribute[i + 1]) * LON_MULT;
-			} else if (strcmp(attribute[i], "uid") == 0) {
-				uid = atoi(attribute[i + 1]) % 256;
-			} else if (strcmp(attribute[i], "timestamp") == 0) {
-				timestamp = attribute[i + 1];
-				date = parsedate(attribute[i + 1]);
+				n.lon = atof(attribute[i + 1]) * 1000000.0;
 			}
 		}
 
-		if (id < 0) {
-			fprintf(stderr, "node with no id\n");
-		} else if (lat == INT_MIN || lon == INT_MIN) {
-			fprintf(stderr, "node %lld has no location\n", id);
+		if (nodecmp(&n, &prevnode) < 0) {
+			fprintf(stderr, "node went backwards (%d): ",
+				nodecmp(&n, &prevnode));
+			fprintf(stderr, "%u %d %d to ", prevnode.id, prevnode.lat, prevnode.lon);
+			fprintf(stderr, "%u %d %d\n", n.id, n.lat, n.lon);
 		} else {
-			if ((id + 1) * sizeof(struct pack) >= tmplen) {
-				if (munmap(tmpmap, tmplen) != 0) {
-					perror("munmap");
-					exit(EXIT_FAILURE);
-				}
-
-				tmplen = id * sizeof(struct pack) + 64 * 1024 * 1024;
-
-				if (ftruncate(tmpfd, tmplen) != 0) {
-					perror("ftruncate");
-					exit(EXIT_FAILURE);
-				}
-				tmpmap = mmap(NULL, tmplen, PROT_READ | PROT_WRITE, MAP_SHARED, tmpfd, 0);
-				if (tmpmap == MAP_FAILED) {
-					perror("mmap");
-					exit(EXIT_FAILURE);
-				}
-			}
-
-			if (id > maxnode) {
-				maxnode = id;
-			}
-
-			struct pack p;
-			p.lat = lat;
-			p.lon = lon;
-			p.uid = uid;
-#if 0
-			if (date > mindate) {
-				p.when = 1;
-			} else {
-				p.when = 0;
-			}
-#endif
-			p.when = date / (371 * 86400);
-			//printf("date %s %d\n", timestamp, p.when);
-
-			tmpmap[id] = p;
+			fwrite(&n, sizeof(struct node), 1, tmp);
+			prevnode = n;
 		}
 
 		if (seq++ % 100000 == 0) {
-			fprintf(stderr, "node %lld  \r", id);
+			fprintf(stderr, "node %u  \r", n.id);
 		}
 	} else if (strcmp(element, "way") == 0) {
+		if (map == NULL) {
+			fflush(tmp);
+
+			int fd = open(tmpfname, O_RDONLY);
+			if (fd < 0) {
+				perror(tmpfname);
+				exit(EXIT_FAILURE);
+			}
+
+			struct stat st;
+			if (fstat(fd, &st) < 0) {
+				perror("stat");
+				exit(EXIT_FAILURE);
+			}
+
+			nel = st.st_size / sizeof(struct node);
+
+			fprintf(stderr, "%d, %lld\n", fd, (long long) st.st_size);
+
+			map = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
+			if (map == MAP_FAILED) {
+				perror("mmap");
+				exit(EXIT_FAILURE);
+			}
+
+			close(fd);
+		}
+
 		int i;
 		thenodecount = 0;
-		strcpy(tags, "");
 		strcpy(thetimestamp, "");
-		bogus = 0;
+		strcpy(tags, "");
 
 		for (i = 0; attribute[i] != NULL; i += 2) {
 			if (strcmp(attribute[i], "id") == 0) {
 				theway = atoi(attribute[i + 1]);
-			} else if (strcmp(attribute[i], "timestamp") == 0) {
+			}
+			if (strcmp(attribute[i], "timestamp") == 0) {
 				strcpy(thetimestamp, attribute[i + 1]);
 			}
 		}
-
-		if (seq++ % 100000 == 0) {
-			fprintf(stderr, "way %lld  \r", (long long) theway);
-		}
 	} else if (strcmp(element, "nd") == 0) {
-		long long id = 0;
-
 		int i;
+
+		struct node n;
+		n.id = 0;
+
 		for (i = 0; attribute[i] != NULL; i += 2) {
 			if (strcmp(attribute[i], "ref") == 0) {
-				id = atoll(attribute[i + 1]);
+				n.id = atoi(attribute[i + 1]);
 			}
 		}
 
-		if (id >= 0 && id <= maxnode ) {
-			struct pack *find = &tmpmap[id];
+		struct node *find = search(&n, map, nel, sizeof(struct node), nodecmp);
 
-			if (find->lat == 0 && find->lon == 0) {
-				fprintf(stderr, "probably bogus node for %lld\n", id);
-				bogus = 1;
-			} else {
-				thenodes[thenodecount++] = find;
-			}
+		if (find->lat == INT_MIN) {
+			fprintf(stderr, "FAIL looked for %u found %u %d\n", n.id, find->id, find->lat);
+		} else if (find->id == n.id) {
+			thenodes[thenodecount++] = find;
 		} else {
-			fprintf(stderr, "bad node %lld\n", id);
-			bogus = 1;
+			fprintf(stderr, "FAIL looked for %u found %u\n", n.id, find->id);
 		}
 	} else if (strcmp(element, "tag") == 0) {
 		if (theway != 0) {
@@ -269,104 +183,43 @@ static void XMLCALL start(void *data, const char *element, const char **attribut
 			}
 
 			int n = strlen(tags);
-			if (n + 2 * strlen(key) + 2 * strlen(value) + 9 < sizeof(tags)) {
-				sprintf(tags + strlen(tags), ", \"");
-				appendq(tags, key);
-				sprintf(tags + strlen(tags), "\": \"");
-				appendq(tags, value);
-				sprintf(tags + strlen(tags), "\"");
+			if (n + strlen(key) + strlen(value) + 5 < sizeof(tags)) {
+				sprintf(tags + n, ";%s=%s", key, value);
 			}
 		}
 	}
 }
 
+int max = 10;
+
 static void XMLCALL end(void *data, const char *el) {
 	if (strcmp(el, "way") == 0) {
-		int i;
-		int year = 0;
-		for (i = 0; i < thenodecount; i++) {
-			if (thenodes[i]->when > year) {
-				year = thenodes[i]->when;
-				break;
-			}
+		int x;
+		struct tm tm;
+		time_t t = 0;
+
+		if (sscanf(thetimestamp, "%d-%d-%dT%d:%d:%d", &tm.tm_year, &tm.tm_mon, &tm.tm_mday, &tm.tm_hour, &tm.tm_min, &tm.tm_sec) == 6) {
+			tm.tm_isdst = -1;
+			tm.tm_year -= 1900;
+			tm.tm_mon -= 1;
+			t = mktime(&tm);
+		} else {
+			fprintf(stderr, "couldn't parse %s\n", thetimestamp);
 		}
 
-		if (thenodecount > 0 /* include */) {
-			int polygon = 0;
-			if (thenodes[0] == thenodes[thenodecount - 1]) {
-				polygon = 1;
-			}
-
-			int start = 0;
-			int end;
-			int split = 0;
-			for (end = 0; end <= thenodecount; end++) {
-				if (end == thenodecount || 
-					(!polygon && end > 0 && 
-						(thenodes[end - 1]->when != thenodes[end]->when || 
-						 thenodes[end - 1]->uid != thenodes[end]->uid))) {
-					int within = 0;
-					if (end != thenodecount) {
-						split = 1;
-					}
-
-					printf("{ \"type\": \"Feature\"");
-
-					if (polygon) {
-						printf(", \"geometry\": { \"type\": \"Polygon\", \"coordinates\": [ [");
-					} else {
-						printf(", \"geometry\": { \"type\": \"LineString\", \"coordinates\": [");
-					}
-
-					if (start > 0) {
-						printf("[ %lf,%lf ]", (thenodes[start - 1]->lon + thenodes[start]->lon) / LON_MULT / 2,
-								      (thenodes[start - 1]->lat + thenodes[start]->lat) / LON_MULT / 2);
-						within = 1;
-					}
-
-					int i;
-					for (i = start; i < end; i++) {
-						if (within) {
-							printf(", ");
-						}
-
-						printf("[ %lf,%lf ]", thenodes[i]->lon / LON_MULT,
-								      thenodes[i]->lat / LON_MULT);
-						within = 1;
-					}
-
-					if (end < thenodecount) {
-						if (within) {
-							printf(", ");
-						}
-
-						printf("[ %lf,%lf ]", (thenodes[end - 1]->lon + thenodes[end]->lon) / LON_MULT / 2,
-								      (thenodes[end - 1]->lat + thenodes[end]->lat) / LON_MULT / 2);
-					}
-
-					if (polygon) {
-						printf("] ] }, \"properties\": { ");
-					} else {
-						printf("] }, \"properties\": { ");
-					}
-
-					printf("\"id\": %u", theway);
-					printf(", \"year\": %u", thenodes[start]->when + BASE_YEAR);
-					printf(", \"uid\": %u", thenodes[start]->uid);
-					printf(", \"timestamp\": \"%s\"", thetimestamp);
-
-					if (bogus) {
-						printf(", \"bogus\": \"true\"");
-					}
-					if (split) {
-						printf(", \"split\": \"true\"");
-					}
-
-					printf("%s", tags);
-					printf(" } }\n");
-
-					start = end;
+		for (x = 0; x < thenodecount; x += max - 1) {
+			if (x + 1 < thenodecount) {
+				int i;
+				for (i = x; i < x + max && i < thenodecount; i++) {
+					printf("%lf,%lf ", thenodes[i]->lat / 1000000.0,
+							   thenodes[i]->lon / 1000000.0);
 				}
+
+				printf(" 32:%d", (int) t);
+
+				printf("// id=%u ", theway);
+				printf("// timestamp=%s ", thetimestamp);
+				printf("%s\n", tags);
 			}
 		}
 
@@ -375,21 +228,19 @@ static void XMLCALL end(void *data, const char *el) {
 }
 
 int main(int argc, char *argv[]) {
-	if (sizeof(struct pack) != 8) {
-		fprintf(stderr, "pack size is somehow %lld\n\n", (long long) (sizeof(struct pack)));
-		exit(EXIT_FAILURE);
-	}
-
-	fprintf(stderr, "lat/lon multiplier is %f for resolution of %f degrees, %f feet\n", LON_MULT, 1.0 / LON_MULT, 1.0 / LON_MULT / FOOT);
-
 	int i;
 	extern int optind;
 	extern char *optarg;
 
-	mindate = parsedate("2014-01-01T00:00:00Z");
-
 	while ((i = getopt(argc, argv, "s:")) != -1) {
 		switch (i) {
+		case 's':
+			max = atoi(optarg);
+			if (max == 0) {
+				max = INT_MAX / 2;
+			}
+			break;
+
 		default:
 			fprintf(stderr, "Usage: %s [-s num]\n", argv[0]);
 			exit(EXIT_FAILURE);
@@ -401,23 +252,10 @@ int main(int argc, char *argv[]) {
 		exit(EXIT_FAILURE);
 	}
 
-	tmpfd = open(tmpfname, O_RDWR | O_CREAT, 0666);
-	if (tmpfd < 0) {
+	tmp = fopen(tmpfname, "w");
+	if (tmp == NULL) {
 		perror(tmpfname);
-		exit(EXIT_FAILURE);
-	}
-
-	unlink(tmpfname);
-
-	tmplen = 1000;
-	if (ftruncate(tmpfd, tmplen) != 0) {
-		perror("ftruncate");
-		exit(EXIT_FAILURE);
-	}
-	tmpmap = mmap(NULL, tmplen, PROT_READ | PROT_WRITE, MAP_SHARED, tmpfd, 0);
-	if (tmpmap == MAP_FAILED) {
-		perror("mmap");
-		exit(EXIT_FAILURE);
+		exit(1);
 	}
 
 	XML_Parser p = XML_ParserCreate(NULL);
@@ -447,5 +285,6 @@ int main(int argc, char *argv[]) {
 	}
 
 	XML_ParserFree(p);
+	unlink(tmpfname);
 	return 0;
 }
